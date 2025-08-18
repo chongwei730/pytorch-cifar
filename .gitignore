@@ -1,0 +1,13 @@
+
+data/
+exp_log/
+checkpoint/
+
+
+models/
+__pycache__/
+*.pyc
+
+
+*.csv
+*.png
