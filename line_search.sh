@@ -17,7 +17,7 @@ conda activate cxrpeft
 
 
 gpuid=5
-export CUDA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0
 echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 # torchrun --nproc_per_node=1 --master_port `expr 12380 + $gpuid` main_finetune.py \
 #     --num_workers 10 \
@@ -50,11 +50,11 @@ echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 #     # uncomment two lines above for inference
 #python main.py --batch_size 2048 --lr 0.0001 --optimizer AdamW --scheduler LineSearch
 python main.py \
-    --batch_size 4096 \
-    --lr 0.0002 \
+    --batch_size 8192 \
+    --lr 0.0005 \
     --optimizer AdamW \
-    --warmup_epochs 1 \
+    --warmup_epochs 10 \
     --scheduler LineSearch \
-    --epoch 400
+    --epoch 1000 \
     --c1 0.0 \
-    --c2 0.0 \
+    --c2 1 \

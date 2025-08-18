@@ -25,6 +25,7 @@ parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
 parser.add_argument('--min_lr', default=1e-6, type=float, help='min learning rate')
 parser.add_argument('--max_lr', default=1.0, type=float, help='max learning rate')
 parser.add_argument('--warmup_epochs', default=0, type=int, help='warmup epochs')
+parser.add_argument('--epoch', default=100, type=int, help='epochs')
 parser.add_argument('--optimizer', default="AdamW", type=str, help='optimizer')
 parser.add_argument('--scheduler', default="LineSearch", type=str, help='scheduler')
 parser.add_argument('--batch_size', default=1024, type=int, help='batch size')
@@ -34,6 +35,7 @@ parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 
 args = parser.parse_args()
+
 
 
 
@@ -51,7 +53,7 @@ def set_seed(seed=42):
 set_seed(42)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-best_acc = 0  # best test accuracy
+# best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # Data
@@ -105,14 +107,6 @@ if device == 'cuda':
     net = torch.nn.DataParallel(net)
     cudnn.benchmark = True
 
-if args.resume:
-    # Load checkpoint.
-    print('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('./checkpoint/ckpt.pth')
-    net.load_state_dict(checkpoint['net'])
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
 
 criterion = nn.CrossEntropyLoss()
 
@@ -132,13 +126,35 @@ else:
 
 
 
-
 if args.scheduler == "LineSearch":
     scheduler = LineSearchScheduler(optimizer, args.min_lr, args.max_lr, args.warmup_epochs, net, args.lr)
 elif args.scheduler == "Cosine":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 else:
     print("Scheduler Not Implemented")
+
+
+
+if args.resume:
+    # Load checkpoint.
+    print('==> Resuming from checkpoint..')
+    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+    checkpoint = torch.load('./checkpoint/ckpt.pth')
+    net.load_state_dict(checkpoint['net'])
+    start_epoch = checkpoint['epoch']
+    optimizer.load_state_dict(checkpoint["optimizer_state"])
+    scheduler.load_state_dict(checkpoint["scheduler_state"])
+
+
+
+
+def allreduce_loss(loss):
+    world_size = dist.get_world_size()
+    with torch.no_grad():
+        dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+        loss /= world_size
+    return loss
+
 
 # Training
 def train(epoch):
@@ -164,6 +180,7 @@ def train(epoch):
                 def closure():
                     outputs = net(inputs)
                     loss_val = criterion(outputs, targets)
+                    # loss_val = allreduce_loss(loss_val)
                     return loss_val
                 gk = torch.cat([p.grad.view(-1) for p in net.parameters() if p.grad is not None]).detach().cpu().numpy()
                 ref_loss = scheduler.step(loss=loss, gk=gk, epoch=epoch, loss_fn=closure, c1=args.c1, c2=args.c2)
@@ -187,7 +204,6 @@ def train(epoch):
 
 
 def test(epoch):
-    global best_acc
     net.eval()
     test_loss = 0
     correct = 0
@@ -209,18 +225,18 @@ def test(epoch):
             #              % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..')
-        state = {
-            'net': net.state_dict(),
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.pth')
-        best_acc = acc
+    # acc = 100.*correct/total
+    # if acc > best_acc:
+    #     print('Saving..')
+    #     state = {
+    #         'net': net.state_dict(),
+    #         'acc': acc,
+    #         'epoch': epoch,
+    #     }
+    #     if not os.path.isdir('checkpoint'):
+    #         os.mkdir('checkpoint')
+    #     torch.save(state, './checkpoint/ckpt.pth')
+    #     best_acc = acc
 
 
 
@@ -230,7 +246,7 @@ with open(f"test_{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.c2}_l
     writer = csv.writer(f)
     writer.writerow(["epoch", "lr", "train_loss", "train_acc", "test_loss", "test_acc"])
 
-    for epoch in range(start_epoch, start_epoch+200):
+    for epoch in range(start_epoch, start_epoch + args.epoch):
         lr, train_loss, train_acc = train(epoch)
         test_loss, test_acc = test(epoch)
 
@@ -239,3 +255,11 @@ with open(f"test_{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.c2}_l
         f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}")
         
         writer.writerow([epoch, lr, train_loss, train_acc, test_loss, test_acc])
+        checkpoint = {
+            "epoch": epoch,
+            "net": net.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+            "args": vars(args),  
+        }
+        torch.save(checkpoint, f"./checkpoint/ckpt.pth")

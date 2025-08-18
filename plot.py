@@ -3,7 +3,7 @@ import pandas as pd
 
 
 cosine_data = pd.read_csv('Cosine_log.csv')
-line_search_data = pd.read_csv('LineSearch_4096_log.csv')
+line_search_data = pd.read_csv('test_LineSearch_8192_AdamW_0.0_log.csv')
 
 colors = {
     "Cosine": "tab:blue",

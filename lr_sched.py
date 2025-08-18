@@ -142,6 +142,24 @@ class LineSearchScheduler():
         for pg in self.optimizer.param_groups:
             pg["lr"] = lr
         return lr
+
+
+
+    def state_dict(self):
+        return {
+            "min_lr": self.min_lr,
+            "max_lr": self.max_lr,
+            "warmup_epochs": self.warmup_epochs,
+            "lr": self.lr,
+            "prev_fvals": self.prev_fvals,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.min_lr = state_dict["min_lr"]
+        self.max_lr = state_dict["max_lr"]
+        self.warmup_epochs = state_dict["warmup_epochs"]
+        self.lr = state_dict["lr"]
+        self.prev_fvals = state_dict["prev_fvals"]
     
 
     def _unflatten_like(self, flat_np):
