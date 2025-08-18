@@ -51,10 +51,11 @@ echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 #python main.py --batch_size 2048 --lr 0.0001 --optimizer AdamW --scheduler LineSearch
 python main.py \
     --batch_size 8192 \
-    --lr 0.0005 \
+    --lr 0.001 \
     --optimizer AdamW \
     --warmup_epochs 10 \
     --scheduler LineSearch \
     --epoch 1000 \
     --c1 0.0 \
     --c2 1 \
+    --resume

@@ -138,12 +138,27 @@ else:
 if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
+    checkpoint = torch.load('./checkpoint/ckpt.pth', weights_only=False)
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('./checkpoint/ckpt.pth')
-    net.load_state_dict(checkpoint['net'])
+    missing, unexpected = net.load_state_dict(checkpoint['net'], strict=False)
+    print("[Model] missing keys:", missing)
+    print("[Model] unexpected keys:", unexpected)
+
+    # optimizer
+    try:
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        print("[Optimizer] state loaded successfully")
+    except Exception as e:
+        print("[Optimizer] load failed:", e)
+
+    # scheduler
+    try:
+        scheduler.load_state_dict(checkpoint["scheduler_state"])
+        print("[Scheduler] state loaded successfully")
+    except Exception as e:
+        print("[Scheduler] load failed:", e)
+
     start_epoch = checkpoint['epoch']
-    optimizer.load_state_dict(checkpoint["optimizer_state"])
-    scheduler.load_state_dict(checkpoint["scheduler_state"])
 
 
 
