@@ -206,6 +206,15 @@ class LineSearchScheduler():
                 self.model.train()
     
     def step(self, loss, gk, epoch, loss_fn, direction=None, opt="strong_wolfe", c1=1e-4, c2=0.9, amax=50.0):
+        if epoch < self.warmup_epochs:
+            for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = self.lr
+            print("warmup")
+            return loss
+
+
+
+        
 
         if opt != "strong_wolfe":
             raise NotImplementedError("Only strong_wolfe is implemented here.")
@@ -333,7 +342,7 @@ class LineSearchScheduler():
 
         for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
-        return lr, float(alpha), int(fc), int(gc)
+        return phi_star
     
 
         # if alpha is None or not np.isfinite(alpha) or alpha <= 0:
@@ -517,10 +526,10 @@ def scalar_search_wolfe2(phi, derphi=None, phi0=None,
     if old_phi0 is not None:
         alpha1 = min(1.0, 1.01*2*(phi0 - old_phi0)/derphi0)
     else:
-        alpha1 = 0.002
+        alpha1 = 1
 
     if alpha1 < 0:
-        alpha1 = 0.002
+        alpha1 = 1
 
     if alpha1 == 0:
         # This shouldn't happen. Perhaps the increment has slipped below

@@ -49,12 +49,4 @@ echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 #     # --eval \
 #     # uncomment two lines above for inference
 #python main.py --batch_size 2048 --lr 0.0001 --optimizer AdamW --scheduler LineSearch
-python main.py \
-    --batch_size 4096 \
-    --lr 0.0002 \
-    --optimizer AdamW \
-    --warmup_epochs 1 \
-    --scheduler LineSearch \
-    --epoch 400
-    --c1 0.0 \
-    --c2 0.0 \
+python main.py --batch_size 4096 --lr 0.0002 --optimizer AdamW --scheduler Cosine

@@ -28,6 +28,8 @@ parser.add_argument('--warmup_epochs', default=0, type=int, help='warmup epochs'
 parser.add_argument('--optimizer', default="AdamW", type=str, help='optimizer')
 parser.add_argument('--scheduler', default="LineSearch", type=str, help='scheduler')
 parser.add_argument('--batch_size', default=1024, type=int, help='batch size')
+parser.add_argument('--c1', default=1e-4, type=float, help='c1')
+parser.add_argument('--c2', default=0.9, type=float, help='c2')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 
@@ -146,22 +148,25 @@ def train(epoch):
     correct = 0
     total = 0
     start = 0
+    ref_loss = 10000.0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
+        print(loss, ref_loss)
+
 
         
         if isinstance(scheduler, LineSearchScheduler):
-            if start == 0:
+            if start == 0 or loss > 1.5 * ref_loss:
                 def closure():
                     outputs = net(inputs)
                     loss_val = criterion(outputs, targets)
                     return loss_val
                 gk = torch.cat([p.grad.view(-1) for p in net.parameters() if p.grad is not None]).detach().cpu().numpy()
-                scheduler.step(loss=loss, gk=gk, epoch=epoch, loss_fn=closure)
+                ref_loss = scheduler.step(loss=loss, gk=gk, epoch=epoch, loss_fn=closure, c1=args.c1, c2=args.c2)
             optimizer.step()
         else:
             optimizer.step()
@@ -221,7 +226,7 @@ def test(epoch):
 
 
 
-with open(f"test_{args.scheduler}_{args.batch_size}_log.csv", mode="w", newline="") as f:
+with open(f"test_{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.c2}_log.csv", mode="w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["epoch", "lr", "train_loss", "train_acc", "test_loss", "test_acc"])
 
