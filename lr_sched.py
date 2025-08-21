@@ -11,6 +11,7 @@ import random
 import torch
 import numpy as np
 from typing import Iterable, List, Tuple, Optional
+from torch.nn.utils import vector_to_parameters, parameters_to_vector
 
 class CustomReduceOnPlateau(ReduceLROnPlateau):
     def __init__(self, optimizer, mode='min', factor=0.7, patience=7, 
@@ -124,12 +125,13 @@ class CustomReduceOnPlateau(ReduceLROnPlateau):
 
 
 class LineSearchScheduler():
-    def __init__(self, optimizer, min_lr, max_lr, warmup_epochs, model, lr):
+    def __init__(self, optimizer, condition, min_lr, max_lr, warmup_epochs, model, lr):
         self.warmup_epochs = warmup_epochs
         self.optimizer = optimizer
         self.min_lr = min_lr
         self.max_lr = max_lr
         self.model = model
+        self.condition = condition
         self.prev_fvals = deque(maxlen=2)
         for pg in self.optimizer.param_groups:
             pg["lr"] = self.min_lr
@@ -173,24 +175,28 @@ class LineSearchScheduler():
     
     
     def _adam_direction_from_state(self, grads, fallback_to_neg_grad=True, use_bias_correction=True):
+        print(" Inside adam_direction function")
         dirs = []
         pg0 = self.optimizer.param_groups[0] if len(self.optimizer.param_groups) > 0 else {}
+        print(f"     get the parameter group dict")
         eps = pg0.get("eps", 1e-8)
         beta1, beta2 = pg0.get("betas", (0.9, 0.999))
         grads_tensors = self._unflatten_like(grads)
+        print("     recover the gradients vector to the same shape as the parameter group")
 
 
         for p, g in zip(self.paras, grads_tensors):
             st = self.optimizer.state.get(p, None)
             if st is not None and "exp_avg" in st and "exp_avg_sq" in st and st.get("step", 0) > 0:
-                has_state = True
                 m = st["exp_avg"]
                 v = st["exp_avg_sq"]
                 t = st["step"]
 
+
                 g = torch.zeros_like(p) if g is None else g
                 m_t = beta1 * m + (1 - beta1) * g
                 v_t = beta2 * v + (1 - beta2) * (g * g)
+       
 
                 # Calculate bias-corrected first and second moment estimates
                 if use_bias_correction:
@@ -202,26 +208,26 @@ class LineSearchScheduler():
 
                 # Compute the update direction
                 update = - m_hat / (v_hat.sqrt() + eps)
+                # print("     Note this is adam direction. Not AdamW!")
 
                 dirs.append(update.view(-1))
             else:
                 if fallback_to_neg_grad:
+                    print("get -g direction")
                     g = torch.zeros_like(p) if (p.grad is None) else p.grad
                     dirs.append((-g).reshape(-1))
                 else:
                     dirs.append(torch.zeros_like(p).reshape(-1))
-
-
         return torch.cat(dirs).detach().cpu().numpy()
 
     
     def restore(self, xk_t, bn_states, was_training):
-        _vector_to_params_(self.model, xk_t)
-        for m, rm, rv in bn_states:
-                m.running_mean.copy_(rm)
-                m.running_var.copy_(rv)
-        if was_training:
-                self.model.train()
+        vector_to_parameters(xk_t, self.model.parameters())
+        # for m, rm, rv in bn_states:
+        #         m.running_mean.copy_(rm)
+        #         m.running_var.copy_(rv)
+        # if was_training:
+        #         self.model.train()
     
     def step(self, loss, gk, epoch, loss_fn, direction=None, opt="strong_wolfe", c1=1e-4, c2=0.9, amax=50.0):
         if epoch < self.warmup_epochs:
@@ -230,52 +236,53 @@ class LineSearchScheduler():
             print("warmup")
             return loss
 
-
-
         
 
         if opt != "strong_wolfe":
             raise NotImplementedError("Only strong_wolfe is implemented here.")
         
-        assert_finite_params(self.model)
+        # assert_finite_params(self.model)
 
 
-        xk_t = _params_to_vector(self.model, self.paras).detach()
+        xk_t = parameters_to_vector(self.model.parameters()).detach()
+        print(f"model weights at step t_0 extracted and detached")
         xk = xk_t.cpu().numpy()
         was_training = self.model.training
         bn_states = []
-        for m in self.model.modules():
-            if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
-                bn_states.append((m, m.running_mean.clone(), m.running_var.clone()))
-
-        self.model.eval() 
+        
+        # for m in self.model.modules():
+        #     if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+        #         bn_states.append((m, m.running_mean.clone(), m.running_var.clone()))
+        # self.model.eval() 
+        # print("model eval mode:")
 
 
 
         def f_at_x(x_np):
             x_t = torch.from_numpy(x_np).to(xk_t.device, dtype=xk_t.dtype)
-            _vector_to_params_(self.model, x_t, paras=self.paras)
+            vector_to_parameters(x_t, self.model.parameters())
 
-            for pg in self.optimizer.param_groups:
-                wd = pg.get("weight_decay", 0.0)
-                if wd != 0:
-                    for p in pg["params"]:
-                        if p.requires_grad:
-                            p.data.add_(p.data, alpha=-pg["lr"] * wd)
+            # for pg in self.optimizer.param_groups:
+            #     wd = pg.get("weight_decay", 0.0)
+            #     if wd != 0:
+            #         for p in pg["params"]:
+            #             if p.requires_grad:
+            #                 p.data.add_(p.data, alpha=-pg["lr"] * wd)
             with torch.no_grad():
                 val = loss_fn().item()
-            _vector_to_params_(self.model, xk_t, paras=self.paras)
+            vector_to_parameters(xk_t, self.model.parameters())
             return val
+
 
         def fprime_at(x_np):
             x_t = torch.from_numpy(x_np).to(xk_t.device, dtype=xk_t.dtype)
-            _vector_to_params_(self.model, x_t, paras=self.paras)
-            for pg in self.optimizer.param_groups:
-                wd = pg.get("weight_decay", 0.0)
-                if wd != 0:
-                    for p in pg["params"]:
-                        if p.requires_grad:
-                            p.data.add_(p.data, alpha=-pg["lr"] * wd)
+            vector_to_parameters(x_t, self.model.parameters())
+            # for pg in self.optimizer.param_groups:
+            #     wd = pg.get("weight_decay", 0.0)
+            #     if wd != 0:
+            #         for p in pg["params"]:
+            #             if p.requires_grad:
+            #                 p.data.add_(p.data, alpha=-pg["lr"] * wd)
             loss = loss_fn()
             grads = torch.autograd.grad(loss, self.paras, retain_graph=False, create_graph=False, allow_unused=True)
             flat = []
@@ -285,17 +292,21 @@ class LineSearchScheduler():
                 else:
                     flat.append(g.reshape(-1))
             g = torch.cat(flat).detach().cpu().numpy()
-            _vector_to_params_(self.model, xk_t, paras=self.paras) 
+            vector_to_parameters(xk_t, self.model.parameters()) 
             return g
         
+
+        print(" get gradient at step t_0")
         gk = fprime_at(xk)  
         if direction is None:
-            pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=False, use_bias_correction=True)
-        
+            print(" get adam direction at step t_0")
+            pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=True, use_bias_correction=True)
 
+    
 
         if float(np.dot(gk, pk_np)) >= 0:
-            print("Ascent")
+            print(" Ascent")
+            print(" clear the m and the v")
             for group in self.optimizer.param_groups:
                 for p in group['params']:
                     state = self.optimizer.state[p]
@@ -309,12 +320,12 @@ class LineSearchScheduler():
                         if 'exp_avg_sq' in state:
                             state['exp_avg_sq'].zero_()
                         state['step'] = torch.tensor(0., device=p.device, dtype=p.dtype)
-
+                
+            print(" get gradient at step t_0 again (should be the same as -g)")
             gk = fprime_at(xk)
-            pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=False, use_bias_correction=True)
+            pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=True, use_bias_correction=True)
         else:
-            print("Descent")
-        self.restore(xk_t, bn_states, was_training)
+            print(" Descent")
 
         old_fval = self.prev_fvals[-1] if len(self.prev_fvals) >= 1 else None
         old_old_fval = self.prev_fvals[-2] if len(self.prev_fvals) >= 2 else None
@@ -323,27 +334,29 @@ class LineSearchScheduler():
             f0 = loss_fn().item()
 
 
+        gc = 0
+        if self.condition == "armijo":
+            alpha, fc, phi_star = line_search_armijo(f_at_x, fprime_at, xk, pk_np, alpha0=self.lr, c1=c1)
+        elif self.condition == "wolfe":
+            alpha, fc, gc, phi_star, phi0_ret, derphi_star = line_search_wolfe2(
+                f=f_at_x,
+                myfprime=fprime_at, 
+                xk=xk,
+                pk=pk_np,
+                gfk=gk,
+                old_fval=old_fval,
+                old_old_fval=old_old_fval,
+                args=(),
+                c1=c1,
+                c2=c2,
+                amax=float(amax),
+            )
 
 
 
-        alpha, fc, gc, phi_star, phi0_ret, derphi_star = line_search_wolfe2(
-            f=f_at_x,
-            myfprime=fprime_at, 
-            xk=xk,
-            pk=pk_np,
-            gfk=gk,
-            old_fval=old_fval,
-            old_old_fval=old_old_fval,
-            args=(),
-            c1=c1,
-            c2=c2,
-            amax=float(amax),
-        )
-
-
-        if alpha is None or not np.isfinite(alpha) or alpha <= 0:
+        if alpha is None or not np.isfinite(alpha) or alpha <= 0 or math.isnan(phi_star):
             current_lr = self.optimizer.param_groups[0]["lr"]
-            alpha = float(current_lr if np.isfinite(current_lr) and current_lr > 0 else self.max_lr)
+            alpha = float(current_lr if np.isfinite(current_lr) and current_lr > 0 else self.min_lr)
 
 
         lr = alpha
@@ -352,14 +365,17 @@ class LineSearchScheduler():
         self.prev_fvals.append(f0)
 
         self.restore(xk_t, bn_states, was_training)
+        print("model training mode")
         
 
         print(f"[LineSearchScheduler] alpha={lr:.6g}, fc={fc}, gc={gc}")
         
 
-
+        
         for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
+        # print(f"line search ideal loss at next batch: {phi_star}")
+        print("Line Search Expected Loss:", phi_star)
         return phi_star
     
 
@@ -386,10 +402,62 @@ class LineSearchScheduler():
 
 
 
+def line_search_armijo(f, fprime, xk, pk, 
+                       alpha0=0.01, c1=1e-4, tau=0.8, max_iter=20):
+    """
+    Armijo backtracking line search.
+    
+    Parameters
+    ----------
+    f : callable
+        Objective function f(x).
+    fprime : callable
+        Gradient function f'(x).
+    xk : np.ndarray
+        Current point.
+    pk : np.ndarray
+        Search direction (descent direction).
+    alpha0 : float, optional
+        Initial step size (default=1.0).
+    c1 : float, optional
+        Armijo condition constant (default=1e-4).
+    tau : float, optional
+        Step size shrinking factor (0 < tau < 1, default=0.5).
+    max_iter : int, optional
+        Maximum backtracking iterations.
+    
+    Returns
+    -------
+    alpha : float
+        Step size satisfying Armijo rule.
+    f_new : float
+        Function value at new point.
+    """
+    alpha = alpha0
+    f0 = f(xk)
+    g0 = fprime(xk)
+    descent = np.dot(g0, pk)
 
+    if descent >= 0:
+        return 0.0, 0, f0  
+    print("\033[91m" + f"     Start Line Search!! Current loss: {f0}" + "\033[0m")
+    count = 0
+    for i in range(max_iter):
+        count += 1
+        new_x = xk + alpha * pk
+        f_new = f(new_x)
+        print("\033[91m" + f"            Attempt{i}: loss: {f_new}" + "\033[0m")
+        if f_new <= f0 + c1 * alpha * descent:
+            return alpha, count, f_new
+        alpha *= tau  
 
-
+    
+    return alpha, count, f(new_x) 
             
+
+
+
+
 def line_search_wolfe2(f, myfprime, xk, pk, gfk=None, old_fval=None,
                        old_old_fval=None, args=(), c1=1e-4, c2=0.9, amax=50):
     """Find alpha that satisfies strong Wolfe conditions.
@@ -436,6 +504,9 @@ def line_search_wolfe2(f, myfprime, xk, pk, gfk=None, old_fval=None,
     For the zoom phase it uses an algorithm by [...].
 
     """
+    
+    
+    
     fc = [0]
     gc = [0]
     gval = [None]
@@ -453,7 +524,6 @@ def line_search_wolfe2(f, myfprime, xk, pk, gfk=None, old_fval=None,
             fprime = myfprime[0]
             newargs = (f,eps) + args
             gval[0] = fprime(xk+alpha*pk, *newargs)  # store for later use
-            # print("VAL",fprime(xk+alpha*pk, *newargs))
             
             return np.dot(gval[0], pk)
     else:
@@ -739,49 +809,14 @@ def _zoom(a_lo, a_hi, phi_lo, phi_hi, derphi_lo,
 
 
 
-def _normalize_params(model, paras: Optional[Iterable]=None) -> List[torch.nn.Parameter]:
-    if paras is None:
-        return [p for p in model.parameters() if p.requires_grad]
-
-    normed = []
-    for item in paras:
-        if isinstance(item, tuple):
-            p = item[1]
-        else:
-            p = item
-        if not isinstance(p, torch.nn.Parameter):
-            raise TypeError(f"Expected torch.nn.Parameter, got {type(p)}")
-        normed.append(p)
-    return normed
 
 
-def _params_to_vector(model, paras: Optional[Iterable]=None) -> torch.Tensor:
-    params = _normalize_params(model, paras)
-    if not params:
-        first = next(model.parameters(), None)
-        device = first.device if first is not None else torch.device("cpu")
-        return torch.empty(0, device=device)
-
-    with torch.no_grad():
-        flats = [p.detach().reshape(-1) for p in params]
-        return torch.cat(flats)
 
 
-def _vector_to_params_(model, vec: torch.Tensor, paras: Optional[Iterable]=None) -> None:
-    params = _normalize_params(model, paras)
-    total = sum(p.numel() for p in params)
-    if vec.numel() != total:
-        raise ValueError(f"Size mismatch: vec has {vec.numel()} elements, "
-                         f"but params require {total}.")
 
-    with torch.no_grad():
-        offset = 0
-        for p in params:
-            numel = p.numel()
-            chunk = vec[offset:offset + numel].view_as(p)
-            if chunk.device != p.device or chunk.dtype != p.dtype:
-                chunk = chunk.to(device=p.device, dtype=p.dtype)
-            p.copy_(chunk)
-            offset += numel
+
+
+
+
 
 
