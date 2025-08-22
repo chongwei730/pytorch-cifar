@@ -2,8 +2,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-cosine_data = pd.read_csv('LineSearch_16384_Adam_0.0001_log.csv')
-line_search_data = pd.read_csv('LineSearch_16384_Adam_0.0_log.csv')
+cosine_data = pd.read_csv('./condition_compare/LineSearch_16384_Adam_wolfe_log.csv')
+line_search_data = pd.read_csv('./condition_compare/LineSearch_armijo.csv')
 
 colors = {
     "Cosine": "tab:blue",

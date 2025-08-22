@@ -12,3 +12,7 @@ __pycache__/
 *.csv
 *.png
 *.txt
+
+base_lr_compare/
+condition_compare/
+test/

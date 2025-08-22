@@ -270,8 +270,8 @@ def test(epoch):
 
 
 
-
-log_path = os.path.join(args.save_dir, f"{save_name}_log.csv")
+os.makedirs(args.save_dir, exist_ok=True)
+log_path = os.path.join(args.save_dir, f"test_{save_name}_log.csv")
 
 if not os.path.exists(log_path):
     with open(log_path, mode="w", newline="") as f:

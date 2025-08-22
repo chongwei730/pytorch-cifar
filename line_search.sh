@@ -23,14 +23,14 @@ echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 python main.py \
     --batch_size 16384 \
     --lr 1 \
-    --optimizer Adam \
+    --optimizer SGD \
     --warmup_epochs 0 \
     --scheduler LineSearch \
     --condition armijo \
     --epoch 200 \
-    --c1 1e-4 \
+    --c1 1e-2 \
     --c2 1 \
-    --save_dir base_lr_compare
+    --save_dir test
 
 # python main.py \
 #     --batch_size 16384 \
@@ -40,7 +40,7 @@ python main.py \
 #     --scheduler LineSearch \
 #     --condition wolfe \
 #     --epoch 200 \
-#     --c1 1e-4 \
+#     --c1 1e-2 \
 #     --c2 1 \
 #     --save_dir condition_compare
 

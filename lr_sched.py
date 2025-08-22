@@ -10,6 +10,7 @@ import random as _rand
 import random
 import torch
 import numpy as np
+from torch.optim import Adam, SGD
 from typing import Iterable, List, Tuple, Optional
 from torch.nn.utils import vector_to_parameters, parameters_to_vector
 
@@ -173,6 +174,33 @@ class LineSearchScheduler():
             off += n
         return outs
     
+    def _sgd_momentum_direction_from_state(self, grads, fallback_to_neg_grad=True):
+        print(" Inside sgd_momentum_direction function")
+        dirs = []
+        pg0 = self.optimizer.param_groups[0] if len(self.optimizer.param_groups) > 0 else {}
+        momentum = pg0.get("momentum", 0.0)   
+
+        grads_tensors = self._unflatten_like(grads)
+        print("     recover the gradients vector to the same shape as the parameter group")
+
+        for p, g in zip(self.paras, grads_tensors):
+            st = self.optimizer.state.get(p, None)
+            if st is not None and "momentum_buffer" in st:
+                v = st["momentum_buffer"]
+                g = torch.zeros_like(p) if g is None else g
+                v_t = momentum * v + g
+                update = -v_t
+                dirs.append(update.view(-1))
+            else:
+                if fallback_to_neg_grad:
+                    print("get -g direction")
+                    g = torch.zeros_like(p) if (p.grad is None) else p.grad
+                    dirs.append((-g).reshape(-1))
+                else:
+                    dirs.append(torch.zeros_like(p).reshape(-1))
+
+        return torch.cat(dirs).detach().cpu().numpy()
+    
     
     def _adam_direction_from_state(self, grads, fallback_to_neg_grad=True, use_bias_correction=True):
         print(" Inside adam_direction function")
@@ -300,7 +328,11 @@ class LineSearchScheduler():
         gk = fprime_at(xk)  
         if direction is None:
             print(" get adam direction at step t_0")
-            pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=True, use_bias_correction=True)
+            if isinstance(self.optimizer, Adam):
+                pk_np = self._adam_direction_from_state(grads=gk, fallback_to_neg_grad=True, use_bias_correction=True)
+            elif isinstance(self.optimizer, SGD):
+                pk_np = self._sgd_momentum_direction_from_state(grads=gk, fallback_to_neg_grad=True)
+
 
     
 
@@ -360,6 +392,7 @@ class LineSearchScheduler():
 
 
         lr = alpha
+        self.lr = lr
 
 
         self.prev_fvals.append(f0)
