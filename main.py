@@ -38,7 +38,7 @@ parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 
 args = parser.parse_args()
-save_name = f"{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.condition}"
+save_name = f"{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.condition}_{args.lr}"
 
 
 
@@ -105,7 +105,7 @@ net = ResNet18()
 # net = ShuffleNetV2(1)
 # net = EfficientNetB0()
 # net = RegNetX_200MF()
-net = SimpleDLA()
+# net = SimpleDLA()
 net = net.to(device)
 if device == 'cuda':
     net = torch.nn.DataParallel(net)
@@ -122,6 +122,11 @@ if args.optimizer == "AdamW":
         weight_decay=5e-4
     )
 elif args.optimizer == "SGD": 
+    optimizer = optim.SGD(net.parameters(), lr=args.lr,
+                      momentum=0.9, weight_decay=5e-4)
+
+
+elif args.optimizer == "plain_SGD": 
     optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=5e-4)
 
@@ -149,7 +154,7 @@ else:
 if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
-    checkpoint = torch.load(f'./checkpoint/{save_name}_ckpt.pth', weights_only=False)
+    checkpoint = torch.load(f'{save_name}_ckpt.pth', weights_only=False)
     assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     missing, unexpected = net.load_state_dict(checkpoint['net'], strict=False)
     print("[Model] missing keys:", missing)
@@ -271,7 +276,7 @@ def test(epoch):
 
 
 os.makedirs(args.save_dir, exist_ok=True)
-log_path = os.path.join(args.save_dir, f"test_{save_name}_log.csv")
+log_path = os.path.join(args.save_dir, f"{save_name}_log.csv")
 
 if not os.path.exists(log_path):
     with open(log_path, mode="w", newline="") as f:

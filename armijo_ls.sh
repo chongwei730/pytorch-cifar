@@ -8,7 +8,7 @@
 #SBATCH --output=exp_log/exp_%a.out
 #SBATCH --error=exp_log/exp_%a.err
 #SBATCH --job-name=finetune
-#SBATCH -p v100
+#SBATCH -p v100,a100-4,a100-8,apollo_agate
 
 eval "$(conda shell.bash hook)"
 source ~/.bashrc
@@ -17,12 +17,32 @@ conda activate cxrpeft
 
 
 gpuid=5
-# export CUDA_VISIBLE_DEVICES=1
-echo "Using GPU: $CUDA_VISIBLE_DEVICES" 
+# export CUDA_VISIBLE_DEVICES=0
+echo "Using GPU: $CUDA_VISIBLE_DEVICES"
+
 python main.py \
-    --batch_size 128 \
-    --lr 0.01 \
+    --batch_size 16384 \
+    --lr 1 \
     --optimizer SGD \
-    --scheduler Cosine \
-    --epoch 200 \
-    --save_dir baseline_compare
+    --warmup_epochs 0 \
+    --scheduler LineSearch \
+    --condition armijo \
+    --epoch 1000 \
+    --c1 1e-2 \
+    --c2 1 \
+    --save_dir ./armijo_batch_compare \
+    --resume
+
+
+
+
+
+
+
+
+
+
+
+
+
+
