@@ -10,37 +10,11 @@
 #SBATCH --job-name=finetune
 #SBATCH -p v100,a100-4,a100-8,apollo_agate,preempt-gpu,msigpu
 
-eval "$(conda shell.bash hook)"
-source ~/.bashrc
-conda activate sls
-
-
-
-gpuid=5
-# export CUDA_VISIBLE_DEVICES=0
-echo "Using GPU: $CUDA_VISIBLE_DEVICES"
-
-
-
 python main.py \
     --batch_size 256 \
     --lr 1 \
-    --optimizer plain_SGD \
-    --accum_steps 16 \
-    --interval 1 \
-    --scheduler LineSearch \
+    --optimizer Prodigy \
+    --scheduler None \
     --epoch 300 \
-    --c1 0.1 \
     --seed 42 \
-    --save_dir ./line_search \
-
-
-
-
-
-
-
-
-
-
-
+    --save_dir ./prodigy \

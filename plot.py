@@ -2,13 +2,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 
-save_dir = "./adam_base_lr_compare"
+save_dir = "./baseline_compare"
 
-method1_name = "cosine"
-method2_name = "line search armijo"
+method1_name = "cosine 128"
+method2_name = "line search 16384"
 
-method1_data = pd.read_csv(os.path.join(save_dir, "cosine.csv"))
-method2_data = pd.read_csv(os.path.join(save_dir, f"LineSearch_16384_Adam_armijo_1.0_log.csv"))
+method1_data = pd.read_csv(os.path.join(save_dir, "Cosine_128_SGD_armijo_0.01_log.csv"))
+method2_data = pd.read_csv(os.path.join(save_dir, f"test_LineSearch_1024_SGD_armijo_log.csv"))
 
 colors = {
     method1_name: "tab:blue",
@@ -56,6 +56,8 @@ axs[1].text(0.99, 0.5, "\n".join(summary_text_loss),
             bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
 axs[1].set_xlabel('Epoch')
 axs[1].set_ylabel('Loss')
+axs[1].set_ylabel("Loss (log)")
+axs[1].set_yscale("log")
 axs[1].set_title('Train Loss Comparison')
 axs[1].legend()
 axs[1].grid(True)

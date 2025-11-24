@@ -19,6 +19,13 @@ from models import *
 # from utils import progress_bar
 from lr_sched import LineSearchScheduler
 import time
+import sys
+from dadaptation import DAdaptAdam, DAdaptSGD
+from prodigyopt import Prodigy
+
+from ray import tune
+from ray.air import session
+from ray.tune.schedulers import ASHAScheduler
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
@@ -29,19 +36,44 @@ parser.add_argument('--warmup_epochs', default=0, type=int, help='warmup epochs'
 parser.add_argument('--epoch', default=100, type=int, help='epochs')
 parser.add_argument('--optimizer', default="AdamW", type=str, help='optimizer')
 parser.add_argument('--scheduler', default="LineSearch", type=str, help='scheduler')
-parser.add_argument('--condition', default="armijo", type=str, help='condition')
 parser.add_argument('--batch_size', default=1024, type=int, help='batch size')
 parser.add_argument('--c1', default=1e-4, type=float, help='c1')
 parser.add_argument('--c2', default=0.9, type=float, help='c2')
+parser.add_argument('--accum_steps', default=1, type=int, help='accum')
+parser.add_argument('--interval', default=1, type=int, help='interval')
 parser.add_argument('--save_dir', default="./", type=str, help='save_dir')
+parser.add_argument('--T_0', default="50", type=int, help='T_0')
+parser.add_argument('--T_mul', default="2", type=int, help='T_mul')
+parser.add_argument('--seed', default=42, type=int, help='random seed')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 
 args = parser.parse_args()
-save_name = f"{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.condition}_{args.lr}"
+save_name = f"{args.scheduler}_{args.batch_size}_{args.optimizer}_{args.c1}_{args.lr}_{args.interval}_{args.accum_steps}"
 
 
 
+log_file_path = os.path.join(args.save_dir, f"{save_name}_stdout.log")
+os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+
+print("=" * 60)
+print(f"Logging training output to: {log_file_path}")
+print("=" * 60)
+
+# class Tee:
+#     def __init__(self, *files):
+#         self.files = files
+#     def write(self, obj):
+#         for f in self.files:
+#             f.write(obj)
+#             f.flush() 
+#     def flush(self):
+#         for f in self.files:
+#             f.flush()
+
+# log_file = open(log_file_path, "a")
+# sys.stdout = Tee(sys.stdout, log_file)
+# sys.stderr = Tee(sys.stderr, log_file)
 
 
 def set_seed(seed=42):
@@ -54,7 +86,7 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-set_seed(42)
+set_seed(args.seed)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # best_acc = 0  # best test accuracy
@@ -81,6 +113,9 @@ trainset = torchvision.datasets.CIFAR10(
 trainloader = torch.utils.data.DataLoader(
     trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
+line_search_train_loader = torch.utils.data.DataLoader(
+    trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+
 testset = torchvision.datasets.CIFAR10(
     root='./data', train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(
@@ -92,10 +127,11 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer',
 # Model
 print('==> Building model..')
 # net = VGG('VGG19')
-net = ResNet18()
+# net = ResNet18()
 # net = PreActResNet18()
 # net = GoogLeNet()
 # net = DenseNet121()
+net = densenet_cifar()
 # net = ResNeXt29_2x64d()
 # net = MobileNet()
 # net = MobileNetV2()
@@ -107,9 +143,9 @@ net = ResNet18()
 # net = RegNetX_200MF()
 # net = SimpleDLA()
 net = net.to(device)
-if device == 'cuda':
-    net = torch.nn.DataParallel(net)
-    cudnn.benchmark = True
+# if device == 'cuda':
+#     net = torch.nn.DataParallel(net)
+#     cudnn.benchmark = True
 
 
 criterion = nn.CrossEntropyLoss()
@@ -123,18 +159,29 @@ if args.optimizer == "AdamW":
     )
 elif args.optimizer == "SGD": 
     optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                      momentum=0.9, weight_decay=5e-4)
+                      momentum=0.9)
 
 
 elif args.optimizer == "plain_SGD": 
     optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                      momentum=0.9, weight_decay=5e-4)
+                      momentum=0)
 
 elif args.optimizer == "Adam":
     optimizer = optim.Adam(
         net.parameters(),
         lr=args.lr,
         betas=(0.9, 0.999)
+    )
+elif args.optimizer == "DAdaptSGD":
+    optimizer = DAdaptSGD(net.parameters(), lr=1.0, weight_decay=0)
+
+elif args.optimizer == "Prodigy":
+    optimizer = Prodigy(
+        net.parameters(),
+        safeguard_warmup=True,
+        lr=1.0,              
+        weight_decay=0,    
+        decouple=True         
     )
 else:
     print("Optimizer Not Implemented")
@@ -143,10 +190,11 @@ else:
 
 
 if args.scheduler == "LineSearch":
-    scheduler = LineSearchScheduler(optimizer, args.condition, args.min_lr, args.max_lr, args.warmup_epochs, net, args.lr)
+    scheduler = LineSearchScheduler(optimizer=optimizer, num_search=16, start_lr=1, model=net, optimizer_type="SGD", injection=False, search_mode="bisection")
 elif args.scheduler == "Cosine":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 else:
+    scheduler = None
     print("Scheduler Not Implemented")
 
 
@@ -179,12 +227,12 @@ if args.resume:
 
 
 
-def allreduce_loss(loss):
-    world_size = dist.get_world_size()
-    with torch.no_grad():
-        dist.all_reduce(loss, op=dist.ReduceOp.SUM)
-        loss /= world_size
-    return loss
+# def allreduce_loss(loss):
+#     world_size = dist.get_world_size()
+#     with torch.no_grad():
+#         dist.all_reduce(loss, op=dist.ReduceOp.SUM)
+#         loss /= world_size
+#     return loss
 
 
 # Training
@@ -194,33 +242,64 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    start = 0
-    ref_loss = 10000.0
+
+
+
+
+    global_step = 0
+    accum_steps = args.accum_steps
+    line_search_interval = args.interval * len(trainloader) 
+
+
     for batch_idx, (inputs, targets) in enumerate(trainloader):
+        fixed_batches = []
+        ls_iter = iter(line_search_train_loader)
         print("\033[92m" + f"start batch {batch_idx}"+ "\033[0m")
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
-        if start == 0:
+        if global_step % line_search_interval == 0:
             print("\033[92m" + f"gradients at batch {batch_idx} stored in parameters" + "\033[0m")
         
         if isinstance(scheduler, LineSearchScheduler):
-            if start == 0 or loss > 1.5 * ref_loss:
-                def closure():
-                    outputs = net(inputs)
-                    loss_val = criterion(outputs, targets)
-                    # loss_val = allreduce_loss(loss_val)
-                    return loss_val
+            if global_step % line_search_interval == 0:
+                for _ in range(accum_steps):
+                        try:
+                            images_ls, labels_ls = next(ls_iter)
+                        except StopIteration:
+                            ls_iter = iter(line_search_train_loader)
+                            images_ls, labels_ls = next(ls_iter)
+
+                        fixed_batches.append((images_ls, labels_ls))
 
 
-                gk = torch.cat([p.grad.view(-1) for p in net.parameters() if p.grad is not None]).detach().cpu().numpy()
-                ref_loss = scheduler.step(loss=loss, gk=gk, epoch=epoch, loss_fn=closure, c1=args.c1, c2=args.c2)
+                def line_search_closure():
+                        optimizer.zero_grad()
+                        total_loss = 0.0
+
+                        for images_ls, labels_ls in fixed_batches:
+                            images_ls = images_ls.to(device)
+                            labels_ls = labels_ls.to(device)
+                            outputs_ls = net(images_ls)
+                            loss_ls = criterion(outputs_ls, labels_ls)
+
+                            total_loss += loss_ls.item()
+                            try:
+                                (loss_ls / accum_steps).backward() 
+                            except:
+                                pass
+
+                        avg_loss = total_loss / accum_steps
+                        return avg_loss
+            scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
             optimizer.step()
         else:
             optimizer.step()
-            scheduler.step()
+           
+            if scheduler != None:
+                scheduler.step()
         print("\033[92m" + f"loss at batch {batch_idx}: {loss}" + "\033[0m")
 
         train_loss += loss.item()
@@ -228,8 +307,11 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
         acc = correct / total
-        start = 1
-        lr = optimizer.param_groups[0]['lr']
+        global_step += 1
+        if isinstance(optimizer, (DAdaptSGD, DAdaptAdam, Prodigy)):
+            lr = optimizer.param_groups[0]['lr'] * optimizer.param_groups[0].get('d', 1.0)
+        else:
+            lr = optimizer.param_groups[0]['lr']
     return lr, train_loss / len(trainloader), acc
 
     
@@ -259,18 +341,18 @@ def test(epoch):
             #              % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # Save checkpoint.
-    # acc = 100.*correct/total
-    # if acc > best_acc:
-    #     print('Saving..')
-    #     state = {
-    #         'net': net.state_dict(),
-    #         'acc': acc,
-    #         'epoch': epoch,
-    #     }
-    #     if not os.path.isdir('checkpoint'):
-    #         os.mkdir('checkpoint')
-    #     torch.save(state, './checkpoint/ckpt.pth')
-    #     best_acc = acc
+    acc = 100.*correct/total
+    if acc > best_acc:
+        print('Saving..')
+        state = {
+            'net': net.state_dict(),
+            'acc': acc,
+            'epoch': epoch,
+        }
+        if not os.path.isdir('checkpoint'):
+            os.mkdir('checkpoint')
+        torch.save(state, './checkpoint/ckpt.pth')
+        best_acc = acc
 
 
 
@@ -302,7 +384,7 @@ for epoch in range(start_epoch, start_epoch + args.epoch):
 
     with open(log_path, mode="a", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([epoch, lr, train_loss, train_acc, test_loss, test_acc])
+        writer.writerow([epoch, lr, train_loss, train_acc, test_loss, test_acc, epoch_time, total_time])
 
     checkpoint = {
         "epoch": epoch,
