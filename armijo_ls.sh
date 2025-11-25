@@ -25,22 +25,13 @@ echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 python main.py \
     --batch_size 256 \
     --lr 1 \
+    --model_name wide_resnet \
+    --dataset_name cifar10 \
     --optimizer plain_SGD \
-    --accum_steps 16 \
+    --accum_steps 64 \
     --interval 1 \
     --scheduler LineSearch \
     --epoch 300 \
-    --c1 0.1 \
+    --c1 0.9 \
     --seed 42 \
-    --save_dir ./line_search \
-
-
-
-
-
-
-
-
-
-
-
+    --save_dir ./wide_resnet_line_search \

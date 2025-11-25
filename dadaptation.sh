@@ -13,9 +13,11 @@
 python main.py \
     --batch_size 256 \
     --lr 1 \
+    --model_name wide_resnet \
+    --dataset_name cifar10 \
     --optimizer DAdaptSGD \
     --warmup_epochs 0 \
     --scheduler None \
     --epoch 300 \
     --seed 42 \
-    --save_dir ./Dadapt_test \
+    --save_dir ./wide_resnet_Dadapt_test \

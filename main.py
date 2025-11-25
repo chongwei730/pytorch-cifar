@@ -16,6 +16,7 @@ import numpy as np
 import random
 
 from models import *
+from models.wide_resnet import Wide_ResNet
 # from utils import progress_bar
 from lr_sched import LineSearchScheduler
 import time
@@ -26,6 +27,8 @@ from prodigyopt import Prodigy
 from ray import tune
 from ray.air import session
 from ray.tune.schedulers import ASHAScheduler
+import timm
+
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
@@ -42,6 +45,8 @@ parser.add_argument('--c2', default=0.9, type=float, help='c2')
 parser.add_argument('--accum_steps', default=1, type=int, help='accum')
 parser.add_argument('--interval', default=1, type=int, help='interval')
 parser.add_argument('--save_dir', default="./", type=str, help='save_dir')
+parser.add_argument('--dataset_name', default="cifar10", type=str, help='name of dataset')
+parser.add_argument('--model_name', default="densenet", type=str, help='name of model')
 parser.add_argument('--T_0', default="50", type=int, help='T_0')
 parser.add_argument('--T_mul', default="2", type=int, help='T_mul')
 parser.add_argument('--seed', default=42, type=int, help='random seed')
@@ -108,21 +113,38 @@ transform_test = transforms.Compose([
 
 
 batch_size = args.batch_size
-trainset = torchvision.datasets.CIFAR10(
-    root='./data', train=True, download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(
-    trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
-line_search_train_loader = torch.utils.data.DataLoader(
-    trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+if args.dataset_name == "cifar100":
+    trainset = torchvision.datasets.CIFAR100(
+        root='./data', train=True, download=True, transform=transform_train)
+    trainloader = torch.utils.data.DataLoader(
+        trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
-testset = torchvision.datasets.CIFAR10(
-    root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(
-    testset, batch_size=1000, shuffle=False, num_workers=2)
+    line_search_train_loader = torch.utils.data.DataLoader(
+        trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
-classes = ('plane', 'car', 'bird', 'cat', 'deer',
-           'dog', 'frog', 'horse', 'ship', 'truck')
+    testset = torchvision.datasets.CIFAR100(
+        root='./data', train=False, download=True, transform=transform_test)
+    testloader = torch.utils.data.DataLoader(
+        testset, batch_size=1000, shuffle=False, num_workers=2)
+    num_classes = 100
+else:
+    trainset = torchvision.datasets.CIFAR10(
+        root='./data', train=True, download=True, transform=transform_train)
+    trainloader = torch.utils.data.DataLoader(
+        trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+
+    line_search_train_loader = torch.utils.data.DataLoader(
+        trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+
+    testset = torchvision.datasets.CIFAR10(
+        root='./data', train=False, download=True, transform=transform_test)
+    testloader = torch.utils.data.DataLoader(
+        testset, batch_size=1000, shuffle=False, num_workers=2)
+    num_classes = 10
+
+# classes = ('plane', 'car', 'bird', 'cat', 'deer',
+#            'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 print('==> Building model..')
@@ -131,7 +153,8 @@ print('==> Building model..')
 # net = PreActResNet18()
 # net = GoogLeNet()
 # net = DenseNet121()
-net = densenet_cifar()
+if args.model_name == "densenet":
+    net = densenet_cifar(num_classes=num_classes)
 # net = ResNeXt29_2x64d()
 # net = MobileNet()
 # net = MobileNetV2()
@@ -142,6 +165,8 @@ net = densenet_cifar()
 # net = EfficientNetB0()
 # net = RegNetX_200MF()
 # net = SimpleDLA()
+elif args.model_name == "wide_resnet":
+    net = Wide_ResNet(16, 8, 0, num_classes) 
 net = net.to(device)
 # if device == 'cuda':
 #     net = torch.nn.DataParallel(net)

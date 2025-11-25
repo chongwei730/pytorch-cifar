@@ -13,10 +13,13 @@
 python main.py \
     --batch_size 256 \
     --lr 1 \
-    --model_name wide_resnet \
-    --dataset_name cifar10 \
     --optimizer Prodigy \
     --scheduler None \
     --epoch 300 \
+    --min_lr 1e-6 \
+    --scheduler CosineWR \
+    --max_lr 1 \
     --seed 42 \
-    --save_dir ./wide_resent_prodigy \
+    --save_dir ./test \
+    --ray_tune \
+    --num_samples 20
