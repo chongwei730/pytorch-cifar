@@ -23,11 +23,11 @@ import time
 import sys
 from dadaptation import DAdaptAdam, DAdaptSGD
 from prodigyopt import Prodigy
-
-from ray import tune
-from ray.air import session
-from ray.tune.schedulers import ASHAScheduler
-import timm
+from muon import Muon
+# from ray import tune
+# from ray.air import session
+# from ray.tune.schedulers import ASHAScheduler
+# import timm
 
 
 
@@ -145,7 +145,7 @@ else:
 
 # classes = ('plane', 'car', 'bird', 'cat', 'deer',
 #            'dog', 'frog', 'horse', 'ship', 'truck')
-
+# ----------------------------
 # Model
 print('==> Building model..')
 # net = VGG('VGG19')
@@ -174,6 +174,42 @@ net = net.to(device)
 
 
 criterion = nn.CrossEntropyLoss()
+
+
+
+import torch.distributed as dist
+
+def _single_process_dist_shim():
+   
+    if not dist.is_available() or dist.is_initialized():
+        return
+
+    dist.get_world_size = lambda *a, **k: 1
+    dist.get_rank = lambda *a, **k: 0
+
+    def _all_gather(output_tensor_list, input_tensor, *args, **kwargs):
+        if isinstance(output_tensor_list, list) and len(output_tensor_list) > 0:
+            for t in output_tensor_list:
+                t.copy_(input_tensor)
+        return None
+    dist.all_gather = _all_gather
+
+    dist.all_reduce = lambda *a, **k: None
+    dist.reduce_scatter = lambda *a, **k: None
+    dist.broadcast = lambda *a, **k: None
+    dist.barrier = lambda *a, **k: None
+
+_single_process_dist_shim()
+
+from muon import MuonWithAuxAdam
+import torch.distributed as dist
+class SafeMuon(MuonWithAuxAdam):
+    def step(self, *args, **kwargs):
+        if not dist.is_available() or not dist.is_initialized():
+            dist.get_world_size = lambda: 1
+            dist.get_rank = lambda: 0
+        return super().step(*args, **kwargs)
+    
 
 if args.optimizer == "AdamW":
     optimizer = optim.AdamW(
@@ -208,6 +244,17 @@ elif args.optimizer == "Prodigy":
         weight_decay=0,    
         decouple=True         
     )
+elif args.optimizer == "Muon":
+
+
+    hidden_weights = [p for p in net.parameters() if p.ndim >= 2]
+    nonhidden = [p for p in net.parameters() if p.ndim < 2]
+
+    param_groups = [
+        dict(params=hidden_weights, use_muon=True, lr=1, weight_decay=0.),
+        dict(params=nonhidden, use_muon=False, lr=1, betas=(0.9, 0.95), weight_decay=0),
+    ]
+    optimizer = SafeMuon(param_groups)
 else:
     print("Optimizer Not Implemented")
 
@@ -215,7 +262,7 @@ else:
 
 
 if args.scheduler == "LineSearch":
-    scheduler = LineSearchScheduler(optimizer=optimizer, num_search=16, start_lr=1, model=net, optimizer_type="SGD", injection=False, search_mode="bisection")
+    scheduler = LineSearchScheduler(optimizer=optimizer, num_search=16, start_lr=1, model=net, optimizer_type="SGD", injection=True, search_mode="bisection")
 elif args.scheduler == "Cosine":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 else:
@@ -260,31 +307,34 @@ if args.resume:
 #     return loss
 
 
+
+
 # Training
-def train(epoch):
+def train(epoch, global_step):
     print("\033[92m" + '\nEpoch: %d' % epoch + "\033[0m")
     net.train()
     train_loss = 0
     correct = 0
     total = 0
+    total_time = 0
+    print(global_step)
 
 
 
 
-    global_step = 0
+
+
     accum_steps = args.accum_steps
     line_search_interval = args.interval * len(trainloader) 
 
 
     for batch_idx, (inputs, targets) in enumerate(trainloader):
+        step_start = time.perf_counter()
         fixed_batches = []
         ls_iter = iter(line_search_train_loader)
         print("\033[92m" + f"start batch {batch_idx}"+ "\033[0m")
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
         if global_step % line_search_interval == 0:
             print("\033[92m" + f"gradients at batch {batch_idx} stored in parameters" + "\033[0m")
         
@@ -319,12 +369,14 @@ def train(epoch):
                         avg_loss = total_loss / accum_steps
                         return avg_loss
             scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
-            optimizer.step()
-        else:
-            optimizer.step()
+
+        outputs = net(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
            
-            if scheduler != None:
-                scheduler.step()
+        if scheduler != None and not isinstance(scheduler, LineSearchScheduler):
+            scheduler.step()
         print("\033[92m" + f"loss at batch {batch_idx}: {loss}" + "\033[0m")
 
         train_loss += loss.item()
@@ -332,12 +384,34 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
         acc = correct / total
+
+
+        step_end = time.perf_counter() 
+        step_time = step_end - step_start
+        total_time += step_time
+
+    
+
+        if global_step % len(trainloader) == 0:
+            test_loss, test_acc = test(epoch)
+            net.train()
+
+
+        
+
         global_step += 1
         if isinstance(optimizer, (DAdaptSGD, DAdaptAdam, Prodigy)):
             lr = optimizer.param_groups[0]['lr'] * optimizer.param_groups[0].get('d', 1.0)
         else:
             lr = optimizer.param_groups[0]['lr']
-    return lr, train_loss / len(trainloader), acc
+
+
+        with open(log_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([global_step, epoch, lr, loss.item(), acc, test_loss, test_acc, step_time, total_time])
+
+            
+    return lr, train_loss / len(trainloader), acc, global_step
 
     
 
@@ -388,28 +462,28 @@ log_path = os.path.join(args.save_dir, f"{save_name}_log.csv")
 if not os.path.exists(log_path):
     with open(log_path, mode="w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["epoch", "lr", "train_loss", "train_acc", "test_loss", "test_acc", "time", "total"])
+        writer.writerow(["step", "epoch", "lr", "train_loss", "train_acc", "test_loss", "test_acc", "time", "total"])
 
 
 
 total_time = 0.0
-
+global_step = 0
 for epoch in range(start_epoch, start_epoch + args.epoch):
     epoch_start = time.perf_counter()
-    lr, train_loss, train_acc = train(epoch)
-    test_loss, test_acc = test(epoch)
+    lr, train_loss, train_acc, global_step = train(epoch, global_step)
+    # test_loss, test_acc = test(epoch)
     epoch_end = time.perf_counter() 
     epoch_time = epoch_end - epoch_start
     total_time += epoch_time
 
-    print(f"Epoch {epoch} | "
-          f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
-          f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}",
-          f"Time: {epoch_time:.2f}s | Total: {total_time/60:.2f}min")
+    # print(f"Epoch {epoch} | "
+    #       f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
+    #       f"Test Loss: {test_loss:.4f}, Test Acc: {test_acc:.4f}",
+    #       f"Time: {epoch_time:.2f}s | Total: {total_time/60:.2f}min")
 
-    with open(log_path, mode="a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([epoch, lr, train_loss, train_acc, test_loss, test_acc, epoch_time, total_time])
+    # with open(log_path, mode="a", newline="") as f:
+    #     writer = csv.writer(f)
+    #     writer.writerow([epoch, lr, train_loss, train_acc, test_loss, test_acc, epoch_time, total_time])
 
     checkpoint = {
         "epoch": epoch,

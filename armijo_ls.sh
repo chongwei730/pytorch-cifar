@@ -17,7 +17,7 @@ conda activate sls
 
 
 gpuid=5
-# export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 
 
@@ -34,4 +34,4 @@ python main.py \
     --epoch 300 \
     --c1 0.9 \
     --seed 42 \
-    --save_dir ./wide_resnet_line_search \
+    --save_dir ./inj_wide_resnet_line_search \

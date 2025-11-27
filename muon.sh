@@ -19,8 +19,9 @@ python main.py \
     --lr 1 \
     --model_name wide_resnet \
     --dataset_name cifar10 \
-    --optimizer Prodigy \
-    --scheduler None \
+    --optimizer Muon \
+    --warmup_epochs 0 \
+    --scheduler cosine \
     --epoch 300 \
     --seed 42 \
-    --save_dir ./wide_resent_prodigy \
+    --save_dir ./wide_resnet_muon \

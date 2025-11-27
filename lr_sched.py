@@ -406,7 +406,8 @@ class LineSearchScheduler():
                 self.original_lrs = [pg['lr'] for pg in self.optimizer.param_groups]  # Save original learning rates
                 injection_factor = random.choice(self.injection_distribution)  # Sample from the predefined distribution
                 for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = param_group['lr'] * injection_factor
+                    param_group['lr'] = self.prev_alpha * injection_factor
+                print(param_group['lr'])
                 return
             else:
                 return

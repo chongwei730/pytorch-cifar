@@ -10,6 +10,10 @@
 #SBATCH --job-name=finetune
 #SBATCH -p v100,a100-4,a100-8,apollo_agate,preempt-gpu,msigpu
 
+
+
+export CUDA_VISIBLE_DEVICES=1
+echo "Using GPU: $CUDA_VISIBLE_DEVICES"
 python main.py \
     --batch_size 256 \
     --lr 1 \
@@ -17,7 +21,7 @@ python main.py \
     --dataset_name cifar10 \
     --optimizer DAdaptSGD \
     --warmup_epochs 0 \
-    --scheduler None \
+    --scheduler cosine \
     --epoch 300 \
     --seed 42 \
     --save_dir ./wide_resnet_Dadapt_test \
