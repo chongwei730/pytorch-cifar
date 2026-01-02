@@ -262,7 +262,7 @@ else:
 
 
 if args.scheduler == "LineSearch":
-    scheduler = LineSearchScheduler(optimizer=optimizer, num_search=16, start_lr=1, model=net, optimizer_type="SGD", injection=True, search_mode="bisection")
+    scheduler = LineSearchScheduler(optimizer=optimizer, model_paras=net.parameters(), num_search=16, start_lr=1, optimizer_type="SGD", injection=True, search_mode="bisection")
 elif args.scheduler == "Cosine":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 else:
@@ -350,9 +350,9 @@ def train(epoch, global_step):
                         fixed_batches.append((images_ls, labels_ls))
 
 
-                def line_search_closure():
-                        optimizer.zero_grad()
-                        total_loss = 0.0
+                def line_search_closure(require_grad=False):
+                        device = next(net.parameters()).device
+                        total_loss = torch.zeros((), device=device)
 
                         for images_ls, labels_ls in fixed_batches:
                             images_ls = images_ls.to(device)
@@ -361,14 +361,12 @@ def train(epoch, global_step):
                             loss_ls = criterion(outputs_ls, labels_ls)
 
                             total_loss += loss_ls.item()
-                            try:
+                            if require_grad:
                                 (loss_ls / accum_steps).backward() 
-                            except:
-                                pass
 
                         avg_loss = total_loss / accum_steps
                         return avg_loss
-            scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
+                scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
 
         outputs = net(inputs)
         loss = criterion(outputs, targets)
