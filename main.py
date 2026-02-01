@@ -50,6 +50,7 @@ parser.add_argument('--model_name', default="densenet", type=str, help='name of 
 parser.add_argument('--T_0', default="50", type=int, help='T_0')
 parser.add_argument('--T_mul', default="2", type=int, help='T_mul')
 parser.add_argument('--seed', default=42, type=int, help='random seed')
+parser.add_argument('--warmup_length', default=100, type=int, help='warmup_length')
 parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 
@@ -262,7 +263,7 @@ else:
 
 
 if args.scheduler == "LineSearch":
-    scheduler = LineSearchScheduler(optimizer=optimizer, model_paras=net.parameters(), num_search=16, start_lr=1, optimizer_type="SGD", injection=True, search_mode="bisection")
+    scheduler = LineSearchScheduler(optimizer=optimizer, model_paras=net.parameters(), num_search=16, start_lr=0, optimizer_type="AdamW", injection=True, search_mode="bisection")
 elif args.scheduler == "Cosine":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 else:
@@ -326,7 +327,7 @@ def train(epoch, global_step):
 
     accum_steps = args.accum_steps
     line_search_interval = args.interval * len(trainloader) 
-
+    warmup_length = args.warmup_length
 
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         step_start = time.perf_counter()
@@ -339,7 +340,7 @@ def train(epoch, global_step):
             print("\033[92m" + f"gradients at batch {batch_idx} stored in parameters" + "\033[0m")
         
         if isinstance(scheduler, LineSearchScheduler):
-            if global_step % line_search_interval == 0:
+            if global_step % line_search_interval == 0 or global_step == warmup_length:
                 for _ in range(accum_steps):
                         try:
                             images_ls, labels_ls = next(ls_iter)
@@ -366,15 +367,14 @@ def train(epoch, global_step):
 
                         avg_loss = total_loss / accum_steps
                         return avg_loss
-                scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
-
+        scheduler.step(line_search_closure, c1=args.c1, step=global_step, interval=line_search_interval, condition="armijo")
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
            
-        if scheduler != None and not isinstance(scheduler, LineSearchScheduler):
-            scheduler.step()
+        # if scheduler != None and not isinstance(scheduler, LineSearchScheduler):
+        #     scheduler.step()
         print("\033[92m" + f"loss at batch {batch_idx}: {loss}" + "\033[0m")
 
         train_loss += loss.item()
